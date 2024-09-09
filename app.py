@@ -123,3 +123,5 @@ with tab2:
         )
     else:
         st.write(f"No patients have been enrolled in {trial_choice} yet.")
+
+    st.image("research_scheme.png")
