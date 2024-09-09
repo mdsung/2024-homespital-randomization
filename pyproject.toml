@@ -1,0 +1,23 @@
+[tool.poetry]
+name = "2024-homespital-randomization"
+version = "0.1.0"
+description = ""
+authors = ["MinDong Sung <mdskylover@gmail.com>"]
+readme = "README.md"
+packages = [{include = "2024_homespital_randomization"}]
+
+[tool.poetry.dependencies]
+python = "^3.10"
+fastapi = "^0.113.0"
+uvicorn = "^0.30.6"
+sqlmodel = "^0.0.22"
+asyncpg = "^0.29.0"
+psycopg2 = "^2.9.9"
+streamlit = "^1.38.0"
+pandas = "^2.2.2"
+numpy = "^2.1.1"
+
+
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"
