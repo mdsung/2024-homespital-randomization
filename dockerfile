@@ -13,8 +13,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 
 # Install Poetry directly from the official repository
-RUN curl -sSL https://install.python-poetry.org | python3 - \
-    && poetry config virtualenvs.create false
+RUN pip install --no-cache-dir poetry && \
+    poetry config virtualenvs.create false
 
 # Copy only the necessary files to the container
 COPY poetry.lock pyproject.toml /app/
