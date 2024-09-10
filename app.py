@@ -1,8 +1,13 @@
-from pathlib import Path
+import os
 
 import numpy as np
 import pandas as pd
 import streamlit as st
+from google.auth.transport.requests import Request
+from google.oauth2.credentials import Credentials
+from google_auth_oauthlib.flow import InstalledAppFlow
+from googleapiclient.discovery import build
+from googleapiclient.errors import HttpError
 
 # Set seed for reproducibility
 np.random.seed(2024)
@@ -13,36 +18,170 @@ INSTITUTES = ["세브란스병원", "일산병원", "아주대학교병원"]
 TRIALS = ["Trial 1 (COPD)", "Trial 2 (ILD)"]
 BLOCK_SIZE = 6
 
-# Create a data folder if it doesn't exist
-DATA_FOLDER = "data"
-Path(DATA_FOLDER).mkdir(parents=True, exist_ok=True)
+# Define Google API scopes (updated to include Drive access)
+SCOPES = [
+    "https://www.googleapis.com/auth/spreadsheets",
+    "https://www.googleapis.com/auth/drive",
+]
 
-# File paths for saving data for both trials
-FILE_PATH_TRIAL_1 = Path(DATA_FOLDER, "enrollment_data_trial_1.csv")
-FILE_PATH_TRIAL_2 = Path(DATA_FOLDER, "enrollment_data_trial_2.csv")
+# File paths for storing credentials
+TOKEN_PATH = "token.json"
+CREDENTIALS_PATH = "credentials.json"
+
+# Spreadsheet range
+DEFAULT_SHEET_RANGE = "A1:E"
 
 
-# Function to load data from CSV
-def load_data(file_path):
-    if Path(file_path).exists():
-        return pd.read_csv(file_path)
-    else:
+def authenticate_google_api():
+    """Authenticate the user and return the credentials."""
+    creds = None
+    if os.path.exists(TOKEN_PATH):
+        creds = Credentials.from_authorized_user_file(TOKEN_PATH, SCOPES)
+
+    if not creds or not creds.valid:
+        if creds and creds.expired and creds.refresh_token:
+            creds.refresh(Request())
+        else:
+            flow = InstalledAppFlow.from_client_secrets_file(CREDENTIALS_PATH, SCOPES)
+            creds = flow.run_local_server(port=0)
+            with open(TOKEN_PATH, "w") as token:
+                token.write(creds.to_json())
+
+    return creds
+
+
+def create_google_sheet(sheet_title):
+    """Create a new Google Spreadsheet and return its ID and first sheet name."""
+    creds = authenticate_google_api()
+    try:
+        service = build("sheets", "v4", credentials=creds)
+        sheet_body = {"properties": {"title": sheet_title}}
+        spreadsheet = (
+            service.spreadsheets()
+            .create(body=sheet_body, fields="spreadsheetId,sheets")
+            .execute()
+        )
+        sheet_id = spreadsheet.get("spreadsheetId")
+        first_sheet_name = spreadsheet["sheets"][0]["properties"][
+            "title"
+        ]  # Get the name of the first sheet
+        return sheet_id, first_sheet_name
+    except HttpError as err:
+        print(f"An error from create_google_sheet occurred: {err}")
+        return None, None
+
+
+def load_data_from_google_sheets(spreadsheet_id, sheet_name):
+    """Loads data from the given Google Spreadsheet."""
+    creds = authenticate_google_api()
+    try:
+        service = build("sheets", "v4", credentials=creds)
+        sheet = service.spreadsheets()
+        result = (
+            sheet.values()
+            .get(
+                spreadsheetId=spreadsheet_id,
+                range=f"{sheet_name}!{DEFAULT_SHEET_RANGE}",
+            )
+            .execute()
+        )
+        values = result.get("values", [])
+
+        if not values:
+            return pd.DataFrame(
+                columns=["Institute", "Patient Number", "Block", "Random Number", "Arm"]
+            )
+        else:
+            return pd.DataFrame(values[1:], columns=values[0])
+    except HttpError as err:
+        print(f"An error from load_data_from_google_sheets occurred: {err}")
         return pd.DataFrame(
             columns=["Institute", "Patient Number", "Block", "Random Number", "Arm"]
         )
 
 
-# Function to save data to CSV
-def save_data(data, file_path):
-    data.to_csv(file_path, index=False)
+def save_data_to_google_sheets(data, spreadsheet_id, sheet_name):
+    """Saves data to the given Google Spreadsheet."""
+    creds = authenticate_google_api()
+    try:
+        service = build("sheets", "v4", credentials=creds)
+        sheet = service.spreadsheets()
+
+        # Prepare the data to be written
+        values = [data.columns.values.tolist()] + data.values.tolist()
+
+        # Write new data, ensuring the range is valid
+        result = (
+            sheet.values()
+            .update(
+                spreadsheetId=spreadsheet_id,
+                range=f"{sheet_name}!{DEFAULT_SHEET_RANGE}",
+                valueInputOption="RAW",
+                body={"values": values},
+            )
+            .execute()
+        )
+    except HttpError as err:
+        print(f"An error from save_data_to_google_sheets occurred: {err}")
 
 
-# Initialize enrollment data storage for both trials
+def get_existing_spreadsheet(spreadsheet_title):
+    """Search for an existing spreadsheet by title."""
+    creds = authenticate_google_api()
+    try:
+        service = build("drive", "v3", credentials=creds)
+        # Search for the spreadsheet by title
+        results = (
+            service.files()
+            .list(
+                q=f"name='{spreadsheet_title}' and mimeType='application/vnd.google-apps.spreadsheet'",
+                spaces="drive",
+                fields="files(id, name)",
+            )
+            .execute()
+        )
+        items = results.get("files", [])
+        if items:
+            return items[0]["id"]
+        return None
+    except HttpError as err:
+        print(f"An error from get_existing_spreadsheet occurred: {err}")
+        return None
+
+
+# Check or create the spreadsheet for both trials
+if "SPREADSHEET_ID_TRIAL_1" not in st.session_state:
+    st.session_state.SPREADSHEET_ID_TRIAL_1 = get_existing_spreadsheet(
+        "Enrollment Data Trial 1"
+    )
+    if not st.session_state.SPREADSHEET_ID_TRIAL_1:
+        st.session_state.SPREADSHEET_ID_TRIAL_1, st.session_state.SHEET_NAME_TRIAL_1 = (
+            create_google_sheet("Enrollment Data Trial 1")
+        )
+    else:
+        st.session_state.SHEET_NAME_TRIAL_1 = "Sheet1"  # You can change this to dynamically retrieve the sheet name if needed.
+
+if "SPREADSHEET_ID_TRIAL_2" not in st.session_state:
+    st.session_state.SPREADSHEET_ID_TRIAL_2 = get_existing_spreadsheet(
+        "Enrollment Data Trial 2"
+    )
+    if not st.session_state.SPREADSHEET_ID_TRIAL_2:
+        st.session_state.SPREADSHEET_ID_TRIAL_2, st.session_state.SHEET_NAME_TRIAL_2 = (
+            create_google_sheet("Enrollment Data Trial 2")
+        )
+    else:
+        st.session_state.SHEET_NAME_TRIAL_2 = "Sheet1"  # You can change this to dynamically retrieve the sheet name if needed.
+
+# Load the data into the session state
 if "enrollment_data_trial_1" not in st.session_state:
-    st.session_state.enrollment_data_trial_1 = load_data(FILE_PATH_TRIAL_1)
+    st.session_state.enrollment_data_trial_1 = load_data_from_google_sheets(
+        st.session_state.SPREADSHEET_ID_TRIAL_1, st.session_state.SHEET_NAME_TRIAL_1
+    )
 
 if "enrollment_data_trial_2" not in st.session_state:
-    st.session_state.enrollment_data_trial_2 = load_data(FILE_PATH_TRIAL_2)
+    st.session_state.enrollment_data_trial_2 = load_data_from_google_sheets(
+        st.session_state.SPREADSHEET_ID_TRIAL_2, st.session_state.SHEET_NAME_TRIAL_2
+    )
 
 # Title and instructions
 st.title("Patient Enrollment and Randomization")
@@ -50,12 +189,14 @@ st.title("Patient Enrollment and Randomization")
 # Add a selectbox for trial selection
 trial_choice = st.selectbox("Select Trial", TRIALS)
 
-# Set the correct file path and session state based on the selected trial
+# Set the correct spreadsheet ID and session state based on the selected trial
 if trial_choice == TRIALS[0]:
-    file_path = FILE_PATH_TRIAL_1
+    spreadsheet_id = st.session_state.SPREADSHEET_ID_TRIAL_1
+    sheet_name = st.session_state.SHEET_NAME_TRIAL_1
     enrollment_data = "enrollment_data_trial_1"
 elif trial_choice == TRIALS[1]:
-    file_path = FILE_PATH_TRIAL_2
+    spreadsheet_id = st.session_state.SPREADSHEET_ID_TRIAL_2
+    sheet_name = st.session_state.SHEET_NAME_TRIAL_2
     enrollment_data = "enrollment_data_trial_2"
 
 # Create two tabs: one for enrollment, one for reviewing assigned patients
@@ -98,8 +239,10 @@ with tab1:
                 ignore_index=True,
             )
 
-            # Save the updated data to the corresponding CSV file
-            save_data(st.session_state[enrollment_data], file_path)
+            # Save the updated data to Google Sheets
+            save_data_to_google_sheets(
+                st.session_state[enrollment_data], spreadsheet_id, sheet_name
+            )
 
             st.success(
                 f"Patient {patient_number} from {institute} has been enrolled in {trial_choice} and assigned to {arm}."
@@ -123,5 +266,3 @@ with tab2:
         )
     else:
         st.write(f"No patients have been enrolled in {trial_choice} yet.")
-
-    st.image("research_scheme.png")
