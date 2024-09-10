@@ -8,6 +8,7 @@ from google.oauth2.credentials import Credentials
 from google_auth_oauthlib.flow import InstalledAppFlow
 from googleapiclient.discovery import build
 from googleapiclient.errors import HttpError
+from icecream import ic
 
 # Set seed for reproducibility
 np.random.seed(2024)
@@ -65,6 +66,7 @@ def create_google_sheet(sheet_title):
         first_sheet_name = spreadsheet["sheets"][0]["properties"][
             "title"
         ]  # Get the name of the first sheet
+        ic(sheet_title, sheet_id, first_sheet_name)
         return sheet_id, first_sheet_name
     except HttpError as err:
         print(f"An error from create_google_sheet occurred: {err}")
@@ -106,7 +108,7 @@ def save_data_to_google_sheets(data, spreadsheet_id, sheet_name):
     try:
         service = build("sheets", "v4", credentials=creds)
         sheet = service.spreadsheets()
-
+        ic(sheet)
         # Prepare the data to be written
         values = [data.columns.values.tolist()] + data.values.tolist()
 
@@ -126,26 +128,27 @@ def save_data_to_google_sheets(data, spreadsheet_id, sheet_name):
 
 
 def get_existing_spreadsheet(spreadsheet_title):
-    """Search for an existing spreadsheet by title."""
+    """Search for an existing non-trashed spreadsheet by title using Google Drive API."""
     creds = authenticate_google_api()
     try:
         service = build("drive", "v3", credentials=creds)
-        # Search for the spreadsheet by title
+        # Search for the spreadsheet by title and ensure it is not trashed
         results = (
             service.files()
             .list(
-                q=f"name='{spreadsheet_title}' and mimeType='application/vnd.google-apps.spreadsheet'",
+                q=f"name='{spreadsheet_title}' and mimeType='application/vnd.google-apps.spreadsheet' and trashed=false",
                 spaces="drive",
                 fields="files(id, name)",
             )
             .execute()
         )
+        ic(results)
         items = results.get("files", [])
         if items:
-            return items[0]["id"]
-        return None
+            return items[0]["id"]  # Return the spreadsheet ID if found
+        return None  # Return None if no file is found
     except HttpError as err:
-        print(f"An error from get_existing_spreadsheet occurred: {err}")
+        print(f"An error occurred: {err}")
         return None
 
 
@@ -159,7 +162,7 @@ if "SPREADSHEET_ID_TRIAL_1" not in st.session_state:
             create_google_sheet("Enrollment Data Trial 1")
         )
     else:
-        st.session_state.SHEET_NAME_TRIAL_1 = "Sheet1"  # You can change this to dynamically retrieve the sheet name if needed.
+        st.session_state.SHEET_NAME_TRIAL_1 = "시트1"  # You can change this to dynamically retrieve the sheet name if needed.
 
 if "SPREADSHEET_ID_TRIAL_2" not in st.session_state:
     st.session_state.SPREADSHEET_ID_TRIAL_2 = get_existing_spreadsheet(
@@ -170,7 +173,7 @@ if "SPREADSHEET_ID_TRIAL_2" not in st.session_state:
             create_google_sheet("Enrollment Data Trial 2")
         )
     else:
-        st.session_state.SHEET_NAME_TRIAL_2 = "Sheet1"  # You can change this to dynamically retrieve the sheet name if needed.
+        st.session_state.SHEET_NAME_TRIAL_2 = "시트1"  # You can change this to dynamically retrieve the sheet name if needed.
 
 # Load the data into the session state
 if "enrollment_data_trial_1" not in st.session_state:
